@@ -2,9 +2,26 @@
 
 App móvil en Kotlin/Compose + backend Spring Boot.
 
+<<<<<<< HEAD
 ## Arquitectura
 - App: MVVM, Retrofit, Compose, StateFlow. Productos y auth contra backend; API externa (FakeStore) en Home.
 - Backend: Spring Boot 3, JPA/H2, Security + JWT, entidades Product y User.
+=======
+Tecnologías y Recursos Implementados
+-------------------
+- Lenguaje: Kotlin
+- Interfaz de Usuario: Jetpack Compose 
+- Arquitectura: MVVM (Model-View-ViewModel)
+- Base de Datos: Room (sobre SQLite) para persistencia local.
+- Gestión de Estado: StateFlow para comunicación reactiva entre UI y ViewModels.
+
+Arquitectura (MVVM)
+-------------------
+- `data/`: Room (AppDatabase, DAOs, Entities) + helper de imágenes.
+- `domain/validation`: validaciones desacopladas (`AuthValidator`, `ProductValidator`).
+- `viewmodel/`: estado con `StateFlow` (Auth, Product, Cart).
+- `ui/`: pantallas Compose, navegación por estado (enum `Screen`) y componentes.
+>>>>>>> e2a807cfb0e72d451956d94bdd2b34d6b1c48494
 
 ## Endpoints backend
 - Auth: `POST /api/auth/register`, `POST /api/auth/login`
