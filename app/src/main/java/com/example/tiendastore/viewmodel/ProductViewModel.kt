@@ -3,17 +3,17 @@ package com.example.tiendastore.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import android.net.Uri
 import com.example.tiendastore.data.DataBaseHelper
 import com.example.tiendastore.data.toDomain
+import com.example.tiendastore.data.repository.ProductRepository
+import com.example.tiendastore.data.repository.ExternalProductRepository
+import com.example.tiendastore.domain.validation.ProductValidator
 import com.example.tiendastore.model.Product
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import com.example.tiendastore.domain.validation.ProductValidator
+import kotlinx.coroutines.flow.collectLatest
 
 data class ProductFormState(
     val id: Int? = null,
@@ -27,38 +27,46 @@ data class ProductFormState(
     val isValid: Boolean = false
 )
 
-class ProductViewModel(application: Application) : AndroidViewModel(application) {
-    private val appContext = getApplication<Application>()
+data class ProductUiState(
+    val loading: Boolean = false,
+    val error: String? = null
+)
+
+class ProductViewModel(
+    application: Application,
+    private val repository: ProductRepository = ProductRepository(productDao = DataBaseHelper.db(application).productDao()),
+    private val externalRepo: ExternalProductRepository = ExternalProductRepository()
+) : AndroidViewModel(application) {
 
     private val _products = MutableStateFlow<List<Product>>(emptyList())
     val products: StateFlow<List<Product>> = _products.asStateFlow()
 
+    private val _external = MutableStateFlow<List<Product>>(emptyList())
+    val external: StateFlow<List<Product>> = _external.asStateFlow()
+
     private val _form = MutableStateFlow(ProductFormState())
     val form: StateFlow<ProductFormState> = _form.asStateFlow()
+
+    private val _ui = MutableStateFlow(ProductUiState())
+    val ui: StateFlow<ProductUiState> = _ui.asStateFlow()
 
     private val categories = listOf("Consolas", "Juegos", "Accesorios", "Otros")
 
     init {
         viewModelScope.launch {
-            DataBaseHelper.db(appContext).productDao().observeAll().collectLatest { entities ->
-                _products.value = entities.map { it.toDomain() }
+            val localFlow = repository.localFlow()
+            if (localFlow != null) {
+                localFlow.collectLatest { entities -> _products.value = entities.map { it.toDomain() } }
+            } else {
+                repository.products.collectLatest { list -> _products.value = list }
             }
         }
-        viewModelScope.launch { loadSeedIfEmpty() }
-    }
-
-    suspend fun loadSeedIfEmpty() {
-        val dao = DataBaseHelper.db(appContext).productDao()
-        val list = dao.observeAll().first()
-        if (list.isEmpty()) {
-            val seed = listOf(
-                Product(0, "Consola X1", 299990.0, 5, "Consolas", "Consola de última generación"),
-                Product(0, "Juego Aventura", 39990.0, 10, "Juegos", "Gran aventura en mundo abierto"),
-                Product(0, "Control Pro", 49990.0, 0, "Accesorios", "Control inalámbrico"),
-                Product(0, "Auriculares Gamer", 29990.0, 8, "Accesorios", "Con micrófono"),
-                Product(0, "Tarjeta Regalo", 10000.0, 20, "Otros", "Crédito para tienda")
-            )
-            seed.forEach { p -> DataBaseHelper.upsertProductWithOptionalImage(appContext, p, null) }
+        viewModelScope.launch { refreshProducts() }
+        viewModelScope.launch {
+            runCatching { externalRepo.fetch() }
+        }
+        viewModelScope.launch {
+            externalRepo.external.collect { list -> _external.value = list }
         }
     }
 
@@ -74,6 +82,17 @@ class ProductViewModel(application: Application) : AndroidViewModel(application)
             else -> current
         }
         _form.value = validate(updated)
+    }
+
+    fun refreshProducts(search: String? = null) {
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(loading = true, error = null)
+            val result = runCatching { repository.refresh(search) }
+            _ui.value = _ui.value.copy(
+                loading = false,
+                error = result.exceptionOrNull()?.message ?: result.exceptionOrNull()?.localizedMessage
+            )
+        }
     }
 
     private fun validate(form: ProductFormState): ProductFormState {
@@ -95,17 +114,21 @@ class ProductViewModel(application: Application) : AndroidViewModel(application)
                 stock = vf.stock.toInt(),
                 category = vf.category,
                 description = vf.description.trim(),
-                imagePath = if (vf.imagePath.startsWith("/")) vf.imagePath else null
+                imagePath = vf.imagePath.takeIf { it.isNotBlank() }
             )
-            val maybeUri = vf.imagePath.takeIf { it.startsWith("content:") }?.let { Uri.parse(it) }
-            DataBaseHelper.upsertProductWithOptionalImage(appContext, prod, maybeUri)
-            clearForm()
+            runCatching {
+                _ui.value = _ui.value.copy(loading = true, error = null)
+                if (prod.id == 0) repository.create(prod) else repository.update(prod)
+            }
+                .onSuccess { clearForm() }
+                .onFailure { err -> _ui.value = _ui.value.copy(error = err.message) }
+            _ui.value = _ui.value.copy(loading = false)
         }
     }
 
     fun edit(id: Int) {
         viewModelScope.launch {
-            val entity = DataBaseHelper.db(appContext).productDao().getByIdOnce(id) ?: return@launch
+            val entity = _products.value.firstOrNull { it.id == id } ?: return@launch
             _form.value = ProductFormState(
                 id = entity.id,
                 name = entity.name,
@@ -122,7 +145,11 @@ class ProductViewModel(application: Application) : AndroidViewModel(application)
 
     fun delete(id: Int) {
         viewModelScope.launch {
-            DataBaseHelper.deleteProduct(appContext, id)
+            runCatching {
+                _ui.value = _ui.value.copy(loading = true, error = null)
+                repository.delete(id)
+            }.onFailure { err -> _ui.value = _ui.value.copy(error = err.message) }
+            _ui.value = _ui.value.copy(loading = false)
         }
     }
 

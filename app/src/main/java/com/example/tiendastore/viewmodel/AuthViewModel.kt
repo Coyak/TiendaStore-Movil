@@ -3,17 +3,14 @@ package com.example.tiendastore.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.tiendastore.data.DataBaseHelper
-import com.example.tiendastore.data.toDomain
-import com.example.tiendastore.data.toEntity
+import com.example.tiendastore.data.repository.AuthRepository
+import com.example.tiendastore.domain.validation.AuthValidator
 import com.example.tiendastore.model.User
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import com.example.tiendastore.domain.validation.AuthValidator
+import com.example.tiendastore.data.remote.AuthTokenStore
 
 data class AuthUiState(
     val username: String = "",
@@ -22,8 +19,10 @@ data class AuthUiState(
     val message: String? = null
 )
 
-class AuthViewModel(application: Application) : AndroidViewModel(application) {
-    private val appContext = getApplication<Application>()
+class AuthViewModel(
+    application: Application,
+    private val repo: AuthRepository = AuthRepository(application.applicationContext)
+) : AndroidViewModel(application) {
 
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
@@ -35,23 +34,14 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     val ui: StateFlow<AuthUiState> = _ui.asStateFlow()
 
     init {
-        // Observe session + users via Room
+        // Inicializa token persistido
+        AuthTokenStore.init(application.applicationContext)
         viewModelScope.launch {
-            DataBaseHelper.db(appContext).sessionDao().observe().collectLatest { sess ->
-                val email = sess?.email
-                if (email == null) {
-                    _currentUser.value = null
-                    _profile.value = null
-                } else {
-                    val ue = DataBaseHelper.db(appContext).userDao().getByEmail(email)
-                    val u = ue?.toDomain()
-                    _currentUser.value = u?.copy(password = "")
-                    _profile.value = u
-                }
+            repo.currentUser.collect { user ->
+                _currentUser.value = user?.copy(password = "")
+                _profile.value = user
             }
         }
-        // Hydrate default admin if needed
-        viewModelScope.launch { hydrate() }
     }
 
     fun clearMessages() {
@@ -65,14 +55,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 _ui.value = _ui.value.copy(errors = errors, message = null)
                 return@launch
             }
-
-            val found = DataBaseHelper.db(appContext).userDao().getByEmail(email.trim())
-            if (found != null) {
-                if (found.password != password) {
-                    _ui.value = _ui.value.copy(message = "Credenciales inválidas", errors = emptyMap())
-                    return@launch
-                }
-                DataBaseHelper.db(appContext).sessionDao().set(com.example.tiendastore.data.SessionEntity(email = found.email))
+            val result = repo.login(email.trim(), password)
+            if (result.isSuccess) {
                 _ui.value = _ui.value.copy(errors = emptyMap(), message = null)
             } else {
                 _ui.value = _ui.value.copy(message = "Credenciales inválidas", errors = emptyMap())
@@ -85,73 +69,38 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             val n = name.trim()
             val e = email.trim()
             val errors = AuthValidator.validateRegister(n, e, password, password).toMutableMap()
-
-            val users = DataBaseHelper.db(appContext).userDao().observeAll().first()
-            if (users.any { it.email.equals(e, ignoreCase = true) }) {
-                errors["email"] = "Correo ya registrado"
-            }
-
             if (errors.isNotEmpty()) {
                 _ui.value = _ui.value.copy(errors = errors, message = null)
                 return@launch
             }
-
-            // Por compatibilidad, usamos username = email
-            val entity = User(username = e, password = password, isAdmin = isAdmin, name = n, email = e).toEntity()
-            DataBaseHelper.db(appContext).userDao().insert(entity)
-            _ui.value = _ui.value.copy(errors = emptyMap(), message = "Cuenta creada, ahora ingresa")
-        }
-    }
-
-    // legacy logout removed (now handled by Room below)
-
-    suspend fun hydrate() {
-        // Ensure admin user exists if users empty
-        val users = DataBaseHelper.db(appContext).userDao().observeAll().first()
-        if (users.isEmpty()) {
-            val admin = User(username = "admin", password = "admin123", isAdmin = true, name = "Admin", email = "admin@local").toEntity()
-            DataBaseHelper.db(appContext).userDao().insert(admin)
+            val result = repo.register(n, e, password, isAdmin)
+            if (result.isSuccess) {
+                _ui.value = _ui.value.copy(errors = emptyMap(), message = "Cuenta creada, ahora ingresa")
+            } else {
+                _ui.value = _ui.value.copy(message = result.exceptionOrNull()?.message ?: "Error al registrar", errors = emptyMap())
+            }
         }
     }
 
     fun updateProfile(name: String, email: String, address: String, city: String) {
-        viewModelScope.launch {
-            val current = _currentUser.value ?: return@launch
-            val errors = mutableMapOf<String, String>()
-            val n = name.trim()
-            val e = email.trim()
-            if (n.length < 3) errors["name"] = "Nombre mínimo 3 caracteres"
-            if (!android.util.Patterns.EMAIL_ADDRESS.matcher(e).matches()) errors["email"] = "Correo inválido"
-
-            val users = DataBaseHelper.db(appContext).userDao().observeAll().first()
-            if (users.any { it.email.equals(e, ignoreCase = true) && it.email != current.email }) {
-                errors["email"] = "Correo ya registrado"
-            }
-            if (errors.isNotEmpty()) {
-                _ui.value = _ui.value.copy(errors = errors)
-                return@launch
-            }
-
-            val entity = User(
-                username = e,
-                password = current.password,
-                isAdmin = current.isAdmin,
-                name = n,
-                email = e,
-                address = address.trim(),
-                city = city.trim()
-            ).toEntity()
-            DataBaseHelper.db(appContext).userDao().update(entity)
-            DataBaseHelper.db(appContext).sessionDao().set(com.example.tiendastore.data.SessionEntity(email = e))
-            _ui.value = _ui.value.copy(message = "Perfil actualizado")
+        // Sin backend específico para perfil, solo se actualiza en memoria para la sesión.
+        val current = _profile.value ?: return
+        val errors = mutableMapOf<String, String>()
+        val n = name.trim()
+        val e = email.trim()
+        if (n.length < 3) errors["name"] = "Nombre mínimo 3 caracteres"
+        if (!android.util.Patterns.EMAIL_ADDRESS.matcher(e).matches()) errors["email"] = "Correo inválido"
+        if (errors.isNotEmpty()) {
+            _ui.value = _ui.value.copy(errors = errors)
+            return
         }
+        val updated = current.copy(name = n, email = e, address = address.trim(), city = city.trim())
+        _profile.value = updated
+        _currentUser.value = updated.copy(password = "")
+        _ui.value = _ui.value.copy(message = "Perfil actualizado (local)")
     }
 
     fun logout() {
-        viewModelScope.launch {
-            DataBaseHelper.db(appContext).sessionDao().clear()
-        }
+        repo.logout()
     }
 }
-
-// no-op

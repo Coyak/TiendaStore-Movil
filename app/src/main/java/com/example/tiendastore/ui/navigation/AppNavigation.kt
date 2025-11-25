@@ -26,6 +26,7 @@ fun AppNavigation(authVM: AuthViewModel, productVM: ProductViewModel, cartVM: Ca
     var screen by remember { mutableStateOf(Screen.LOGIN) }
     var selectedId by remember { mutableStateOf<Int?>(null) }
     val currentUser by authVM.currentUser.collectAsState()
+    val productUi = productVM.ui.collectAsState().value
 
     LaunchedEffect(currentUser) {
         screen = if (currentUser == null) Screen.LOGIN else Screen.HOME
@@ -44,6 +45,9 @@ fun AppNavigation(authVM: AuthViewModel, productVM: ProductViewModel, cartVM: Ca
         )
         Screen.HOME -> HomeScreen(
             products = productVM.products.collectAsState().value,
+            externalProducts = productVM.external.collectAsState().value,
+            loading = productUi.loading,
+            errorMessage = productUi.error,
             isAdmin = currentUser?.isAdmin == true,
             displayName = authVM.profile.collectAsState().value?.name ?: "",
             onLogout = { authVM.logout() },
@@ -53,6 +57,7 @@ fun AppNavigation(authVM: AuthViewModel, productVM: ProductViewModel, cartVM: Ca
                 selectedId = id
                 screen = Screen.PRODUCT_DETAIL
             },
+            onRefresh = { productVM.refreshProducts() },
             cartCount = cartVM.totalItems.collectAsState().value,
             cartItems = cartVM.items.collectAsState().value,
             cartTotal = cartVM.totalPrice.collectAsState().value,

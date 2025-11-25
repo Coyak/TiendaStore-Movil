@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -27,12 +26,14 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Badge
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -55,12 +56,16 @@ import com.example.tiendastore.ui.view.components.CartQuickSheet
 @Composable
 fun HomeScreen(
     products: List<Product>,
+    externalProducts: List<Product>,
+    loading: Boolean,
+    errorMessage: String?,
     isAdmin: Boolean,
     displayName: String,
     onLogout: () -> Unit,
     onAdmin: () -> Unit,
     onEditProfile: () -> Unit,
     onProductClick: (Int) -> Unit,
+    onRefresh: () -> Unit,
     cartCount: Int,
     cartItems: List<CartItem>,
     cartTotal: Double,
@@ -140,6 +145,42 @@ fun HomeScreen(
                     .fillMaxSize()
                     .padding(16.dp)
             ) {
+                if (loading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (!errorMessage.isNullOrBlank()) {
+                    Text(errorMessage, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = onRefresh) { Text("Reintentar") }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (externalProducts.isNotEmpty()) {
+                    Text("Novedades (API externa)", style = MaterialTheme.typography.titleLarge)
+                    Spacer(Modifier.height(8.dp))
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        horizontalArrangement = ColArrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.height(240.dp)
+                    ) {
+                        items(externalProducts, key = { it.id }) { p ->
+                            androidx.compose.material3.Card(onClick = { }) {
+                                com.example.tiendastore.ui.view.components.ImageFromPath(
+                                    p.imagePath,
+                                    Modifier.fillMaxWidth().aspectRatio(1f)
+                                )
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Text(p.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                                    Text("${formatPriceCLP(p.price)}", style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(16.dp))
+                    Divider()
+                    Spacer(Modifier.height(16.dp))
+                }
+
                 Text("Productos", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))
                 Divider()
